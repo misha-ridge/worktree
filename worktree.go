@@ -20,11 +20,6 @@ var currentVersionOnce sync.Once
 
 // CurrentCommitID returns the current commit id
 func CurrentCommitID() string {
-	// Jenkins
-	if id, ok := os.LookupEnv("GIT_COMMIT"); ok {
-		return id
-	}
-
 	idCmd := exec.Command("git", "rev-parse", "HEAD")
 	idCmd.Stderr = os.Stderr
 
