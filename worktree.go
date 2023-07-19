@@ -89,8 +89,7 @@ func Dirty() bool {
 
 // CurrentVersion returns the current version of the worktree in SemVer 2.0
 // format. Dirty trees get a stable version too (two identically-dirty trees
-// will produce an identical version). Debug versions are marked as such as
-// well.
+// will produce an identical version).
 func CurrentVersion() string {
 	currentVersionOnce.Do(func() {
 		commitID := CurrentCommitID()
