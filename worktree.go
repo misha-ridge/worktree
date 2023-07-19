@@ -6,33 +6,37 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
-
-	"github.com/ridge/must/v2"
 )
 
-var cachedDirty bool
-var dirtyOnce sync.Once
-
-var cachedCurrentVersion string
-var currentVersionOnce sync.Once
-
 // CurrentCommitID returns the current commit id
-func CurrentCommitID() string {
+func CurrentCommitID() (string, error) {
 	idCmd := exec.Command("git", "rev-parse", "HEAD")
 	idCmd.Stderr = os.Stderr
 
-	return strings.Trim(string(must.OK1(idCmd.Output())), "\n")
+	out, err := idCmd.Output()
+	if err != nil {
+		return "", err
+	}
+
+	return strings.Trim(string(out), "\n"), nil
 }
 
-func currentCommitTimestamp() time.Time {
+func currentCommitTimestamp() (time.Time, error) {
 	timestampCmd := exec.Command("git", "show", "--format=%ct", "--no-patch")
 	timestampCmd.Stderr = os.Stderr
 
-	stringTimestamp := strings.Trim(string(must.OK1(timestampCmd.Output())), "\n")
+	out, err := timestampCmd.Output()
+	if err != nil {
+		return time.Time{}, err
+	}
 
-	return time.Unix(must.OK1(strconv.ParseInt(stringTimestamp, 10, 64)), 0)
+	ts, err := strconv.ParseInt(strings.Trim(string(out), "\n"), 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	return time.Unix(ts, 0), nil
 }
 
 // This function calculates a hash of the whole checked out worktree, including
@@ -45,8 +49,11 @@ func currentCommitTimestamp() time.Time {
 // This causes some garbage accumulating in the repository, but it is cleaned up
 // by a periodic 'git gc', and Git does not have an in-memory "simulate writing
 // to repository" mode to avoid it.
-func worktreeID() string {
-	tempDir := must.OK1(os.MkdirTemp("", "worktree-id-"))
+func worktreeID() (string, error) {
+	tempDir, err := os.MkdirTemp("", "worktree-id-")
+	if err != nil {
+		return "", err
+	}
 	defer func() {
 		_ = os.RemoveAll(tempDir) // we don't care about failed cleanup
 	}()
@@ -56,12 +63,18 @@ func worktreeID() string {
 	gitAddCmd.Stdout = os.Stdout
 	gitAddCmd.Stderr = os.Stderr
 	gitAddCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tempIndexFile)
-	must.OK(gitAddCmd.Run())
+	if err := gitAddCmd.Run(); err != nil {
+		return "", err
+	}
 
 	gitWriteTreeCmd := exec.Command("git", "write-tree")
 	gitWriteTreeCmd.Stderr = os.Stderr
 	gitWriteTreeCmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+tempIndexFile)
-	return strings.Trim(string(must.OK1(gitWriteTreeCmd.Output())), "\n")
+	out, err := gitWriteTreeCmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.Trim(string(out), "\n"), nil
 }
 
 func semver(commitID string, commitTimestamp time.Time, dirtyWorktreeID string) string {
@@ -73,27 +86,38 @@ func semver(commitID string, commitTimestamp time.Time, dirtyWorktreeID string) 
 }
 
 // Dirty returns whether the checked out worktree is dirty (contains new or modified files)
-func Dirty() bool {
-	dirtyOnce.Do(func() {
-		statusCmd := exec.Command("git", "status", "--porcelain")
-		statusCmd.Stderr = os.Stderr
-		cachedDirty = len(must.OK1(statusCmd.Output())) != 0
-	})
-	return cachedDirty
+func Dirty() (bool, error) {
+	statusCmd := exec.Command("git", "status", "--porcelain")
+	statusCmd.Stderr = os.Stderr
+	out, err := statusCmd.Output()
+	if err != nil {
+		return false, err
+	}
+	return len(out) != 0, nil
 }
 
 // CurrentVersion returns the current version of the worktree in SemVer 2.0
 // format. Dirty trees get a stable version too (two identically-dirty trees
 // will produce an identical version).
-func CurrentVersion() string {
-	currentVersionOnce.Do(func() {
-		commitID := CurrentCommitID()
-		commitTimestamp := currentCommitTimestamp()
-		dirtyWorktreeID := ""
-		if Dirty() {
-			dirtyWorktreeID = worktreeID()
+func CurrentVersion() (string, error) {
+	commitID, err := CurrentCommitID()
+	if err != nil {
+		return "", err
+	}
+	commitTimestamp, err := currentCommitTimestamp()
+	if err != nil {
+		return "", err
+	}
+	dirty, err := Dirty()
+	if err != nil {
+		return "", err
+	}
+	var dirtyWorktreeID string
+	if dirty {
+		dirtyWorktreeID, err = worktreeID()
+		if err != nil {
+			return "", err
 		}
-		cachedCurrentVersion = semver(commitID, commitTimestamp, dirtyWorktreeID)
-	})
-	return cachedCurrentVersion
+	}
+	return semver(commitID, commitTimestamp, dirtyWorktreeID), nil
 }
